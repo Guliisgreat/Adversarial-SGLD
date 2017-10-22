@@ -1,0 +1,3 @@
+name: lr
+kwargs:
+  output_dim: 10

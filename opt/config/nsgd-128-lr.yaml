@@ -1,0 +1,13 @@
+node1: &bs 128
+
+name: 'NoisedSGD'
+kwargs:
+  lr: 0.05
+  dataset_size: 40000
+  momentum: 0.9
+  weight_decay: 0.001
+batcher_name: MiniBatcher
+batcher_kwargs:
+  batch_size: *bs
+max_train_iters: 20000
+lrsche: [[3000, .1],[10000, .1]]

@@ -1,0 +1,11 @@
+name: 'optim.SGD'
+kwargs:
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.001
+batcher_name: MiniBatcher
+batcher_kwargs:
+  batch_size: 128
+max_train_iters: 20000
+lrsche: [[3000, .1],[10000, .1]]
+#lrpoly: [0.01, 1, 0.55] #(a,b,g) for a(b+t)^(-g)
