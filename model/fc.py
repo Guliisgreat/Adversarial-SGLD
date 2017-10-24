@@ -54,7 +54,6 @@ class lr(object):
         super(lr, self).__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.softmax = torch.nn.Softmax()
         models = torch.nn.Sequential(
             torch.nn.Linear(input_dim, output_dim)
         )
@@ -62,7 +61,6 @@ class lr(object):
 
     def forward(self, x):
         y = self.model(x.view(-1, self.input_dim))
-        y = self.softmax(y)
         return y
 
     def parameters(self):
