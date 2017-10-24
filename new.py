@@ -211,11 +211,13 @@ def main(arguments):
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    # Baby_mnist
     trainset = BabyMnist( train=True, transform=transform)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
     testset = BabyMnist( train=False, transform=transform)
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
+    # # minist
     # trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
     # trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
     # testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
@@ -247,7 +249,7 @@ def main(arguments):
 
             # gradient_data = store_gradient_data(outputs, criterion, labels)
             # Loss function
-            training_loss = Loss.CrossEntropyLoss(outputs,labels)
+            training_loss = Loss.cross_entropy_loss(outputs,labels)
             loss_monitor.record_tensorboard(training_loss.data[0],iteration,sess,train_writer)
             # loss = criterion(outputs, labels)
             # accuracy = prediction_accuracy(outputs, labels)
@@ -255,7 +257,10 @@ def main(arguments):
             accuracy = inference_accuracy(training_predictions, labels)
             accuracy_monitor.record_tensorboard(accuracy, iteration,sess, train_writer)
             # Parameter Update
-            training_loss.backward(retain_variables=True)
+
+            model.zero_grad()
+            outputs.backward(gradient = gradient_data, retain_variables = True)
+            # training_loss.backward(retain_variables=True)
             optimizer.step()
 
             # monitor Variance
@@ -274,7 +279,7 @@ def main(arguments):
                 test_inputs, test_labels = Variable(test_inputs), Variable(test_labels)
                 # Inference
                 point_outputs = model.forward(test_inputs)
-                point_loss = Loss.CrossEntropyLoss(point_outputs, test_labels)
+                point_loss = Loss.cross_entropy_loss(point_outputs, test_labels)
                 loss_monitor.record_tensorboard(point_loss.data[0], iteration, sess, point_writer)
                 point_predictions = Loss.inference_prediction(point_outputs)
                 point_accuracy = inference_accuracy(point_predictions, test_labels)
