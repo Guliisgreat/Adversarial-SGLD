@@ -36,6 +36,7 @@ from opt.loss import *
 from model.fc import fc, lr
 from opt.nsgd import NoisedSGD
 import torch.optim as optim
+from dataset.BabyMnist import BabyMnist
 
 # from model.cnn import *
 import torchvision
@@ -59,7 +60,7 @@ def load_configuration(arguments):
         model_name = os.path.basename(f_model_config).split('.')[0]
         opt_name = os.path.basename(f_opt_config).split('.')[0]
         timestamp = '{:%Y-%m-%d}'.format(datetime.datetime.now())
-        data_name = 'mnist'
+        data_name = 'baby_mnist'
         if arguments['--prefix']:
             exp_name = '%s:%s-X-%s-X-%s@%s' % (arguments['<p>'], model_name, opt_name, data_name, timestamp)
         else:
@@ -210,12 +211,15 @@ def main(arguments):
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-    # size_dataset = np.size(trainset.train_data.numpy())
-    # print(size_dataset)
+    trainset = BabyMnist( train=True, transform=transform)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
-    testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+    testset = BabyMnist( train=False, transform=transform)
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+
+    # trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+    # trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+    # testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+    # testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
 
    # Tensorboard
