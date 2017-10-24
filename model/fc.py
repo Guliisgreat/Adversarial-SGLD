@@ -6,7 +6,7 @@ from torch.autograd import Variable
 class fc(object):
     """docstring for fc"""
 
-    def __init__(self, Hn, input_dim=28 * 28, output_dim=10):
+    def __init__(self, Hn, input_dim=8 * 8, output_dim=10):
         super(fc, self).__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -50,11 +50,10 @@ class fc(object):
 class lr(object):
     """docstring for logistic regression model"""
 
-    def __init__(self, input_dim=28 * 28, output_dim=10):
+    def __init__(self, input_dim=8 * 8, output_dim=10):
         super(lr, self).__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.softmax = torch.nn.Softmax()
         models = torch.nn.Sequential(
             torch.nn.Linear(input_dim, output_dim)
         )
@@ -62,7 +61,6 @@ class lr(object):
 
     def forward(self, x):
         y = self.model(x.view(-1, self.input_dim))
-        y = self.softmax(y)
         return y
 
     def parameters(self):

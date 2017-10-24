@@ -6,6 +6,6 @@ kwargs:
 batcher_name: MiniBatcher
 batcher_kwargs:
   batch_size: 128
-max_train_iters: 20000
+max_train_iters: 10000
 lrsche: [[3000, .1],[10000, .1]]
 #lrpoly: [0.01, 1, 0.55] #(a,b,g) for a(b+t)^(-g)
