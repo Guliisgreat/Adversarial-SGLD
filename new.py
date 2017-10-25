@@ -98,7 +98,6 @@ def load_configuration(arguments, name_dataset):
 
     return model, opt, Loss, exp_name, model_config, opt_config
 
-
 def update_LearningRate(optimizer, iteration, opt_config):
     sd = optimizer.state_dict()
     learning_rate = sd['param_groups'][0]['lr']
@@ -124,21 +123,13 @@ def check_point(model, optimizer, iteration, exp_name):
         model.save(name)
         torch.save(optimizer.state_dict(), './saves/%s/opt_%i.t7' % (exp_name, iteration))
 
-# def prediction_accuracy(outputs, labels):
-#     prediction = outputs.data.numpy().argmax(1)
-#     accuracy = (prediction == labels.data.numpy()).mean().astype(float)
-#     return accuracy
 def inference_accuracy(prediction, labels):
     accuracy = (prediction == labels.data.numpy()).mean().astype(float)
     return accuracy
 
-# need batch
-
 def posterior_expectation(model,Loss, posterior_samples, posterior_weights, inputs ):
     num_posterior_samples = len(posterior_samples)
     outputs_weighted_sum = 0
-    # we need to load posterior parameter samples to make inference, but cannot influence the training process
-    #
     model.eval()
     for sample_idx in range(num_posterior_samples):
         model.model.load_state_dict(posterior_samples[sample_idx])
@@ -148,7 +139,7 @@ def posterior_expectation(model,Loss, posterior_samples, posterior_weights, inpu
         outputs_weighted_sum = outputs_weighted_sum + outputs_prob*posterior_weights[sample_idx]
         outputs_expectation = outputs_weighted_sum / (sum(posterior_weights))
     model.train()
-    return outputs_expectation
+    return outputs_expectation #(n,d)
 
 def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_threshold, learning_rate):
     is_collecting = False
@@ -158,26 +149,17 @@ def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_thr
     num_parameter = oG.size()[1]
     for gidx in xrange(oG.size()[0]):
         model.zero_grad()
-        tt = oG[gidx][None]
-        tmp = oG[gidx][None].repeat(batch_size, 1)
-        gradient_feed = torch.cat((tt,torch.zeros(batch_size-1, num_parameter)))
-        #gradient_feed = tmp
+        # each example's gradient
+        gradient_feed = batch_size * torch.cat((oG[gidx][None],torch.zeros(batch_size-1, num_parameter)))
         outputs.backward(gradient=gradient_feed, retain_variables=True)
         ps = list(model.parameters())
         g = torch.cat([p.grad.view(-1, 1) for p in ps])
         gs.append(g)
 
-    gs_n = torch.cat(gs, 1)
-    gs_mean_n = torch.mean(gs_n,1)
-    gs_center_n = torch.abs(gs_n - gs_mean_n.repeat(1,batch_size))
-    V_s_n = (1/(batch_size))*torch.mm(gs_center_n, gs_center_n.t())
-    _, s, _ = torch.svd(V_s_n.data)
-
-
-    # gs = torch.cat(gs, 1).t()  ## (N, D) gradient matrix
-    # gs_centered = gs - gs.mean(0).expand_as(gs)
-    # V_s = (1 / optimizer.correction) * torch.mm(gs_centered, gs_centered.t())  ## (D, D), hopefully V_s in the paper
-    # _, s, _ = torch.svd(V_s.data)
+    gs = torch.cat(gs, 1).t()  ## (N, D) gradient matrix
+    gs_centered = gs - gs.mean(0).expand_as(gs)
+    V_s = (1 / optimizer.correction) * torch.mm(gs_centered, gs_centered.t())  ## (D, D), hopefully V_s in the paper
+    _, s, _ = torch.svd(V_s.data)
     alpha = s[0] * (learning_rate/optimizer.correction) * (optimizer.correction* optimizer.correction) / (4*batch_size)
 
     if alpha < alpha_threshold:  # todo: ...
@@ -192,30 +174,19 @@ def posterior_sampling(sample_size, model,learning_rate, posterior_samples, post
         del posterior_weights[0]
     return posterior_samples, posterior_weights
 
-# def store_gradient_data(outputs, criterion, label):
-#     outputs = outputs.data.clone().type(torch.FloatTensor)
-#     outputs = Variable(outputs, requires_grad=True)
-#     loss = criterion(outputs, label)
-#     loss.backward()
-#     gradient_data = outputs.grad.data
-#     return gradient_data
-
-
-
-
 def main(arguments):
 
     # Set up
     iteration = 0
-    batch_size = 20
-    alpha_threshold = 0.1
+    batch_size = 100
+    alpha_threshold = 0.5
     sample_size = 20
     sample_interval = 20
     posterior_samples = []
     posterior_weights = []
     validation_interval = 200
     variance_monitor_interval = 50
-    name_dataset = 'Baby_mnist'
+    name_dataset = 'mnist'
 
   # Load argumentts: Module, Optimizer, Loss_function
     model, optimizer, Loss, exp_name, model_config, opt_config = load_configuration(arguments, name_dataset)
@@ -253,28 +224,26 @@ def main(arguments):
 
             inputs, labels = data
             inputs, labels = Variable(inputs), Variable(labels)
-            # update learning rate
+
+            # Update learning rate
             learning_rate = update_LearningRate(optimizer, iteration, opt_config)
             learning_rate_monitor.record_tensorboard(learning_rate,iteration,sess,train_writer)
+
             # Inference
             optimizer.zero_grad()
             outputs = model.forward(inputs)
-            gradient_data =  Loss.store_gradient_data(outputs,labels)
+            gradient_data = Loss.store_gradient_data(outputs,labels)
 
-            # gradient_data = store_gradient_data(outputs, criterion, labels)
             # Loss function
             training_loss = Loss.nll_loss(outputs,labels)
             loss_monitor.record_tensorboard(training_loss.data[0],iteration,sess,train_writer)
-            # loss = criterion(outputs, labels)
-            # accuracy = prediction_accuracy(outputs, labels)
             training_predictions = Loss.inference_prediction(outputs)
             accuracy = inference_accuracy(training_predictions, labels)
             accuracy_monitor.record_tensorboard(accuracy, iteration,sess, train_writer)
-            # Parameter Update
 
+            # Parameter Update
             optimizer.zero_grad()
             outputs.backward(gradient = gradient_data, retain_variables = True)
-            # training_loss.backward(retain_variables=True)
             optimizer.step()
 
             # monitor Variance
@@ -299,15 +268,12 @@ def main(arguments):
                 point_predictions = Loss.inference_prediction(point_outputs)
                 point_accuracy = inference_accuracy(point_predictions, test_labels)
                 accuracy_monitor.record_tensorboard(point_accuracy, iteration, sess, point_writer)
-                # point_loss = criterion(point_outputs, test_labels)
-                # loss_monitor.record_tensorboard(point_loss.data[0], iteration, sess, point_writer)
-                # point_accuracy = prediction_accuracy(point_outputs, test_labels)
-                # accuracy_monitor.record_tensorboard(point_accuracy, iteration, sess, point_writer)
+
             # Bayesian Estimation
             if (iteration % validation_interval == 0) and (len(posterior_samples) == sample_size):
                 # Inference
                 posterior_outputs = posterior_expectation(model,Loss, posterior_samples, posterior_weights, test_inputs)
-                posterior_loss = Loss.nll_loss(posterior_outputs, test_labels)
+                posterior_loss = Loss.CrossEntropyLoss(posterior_outputs, test_labels)
                 loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
                 posterior_predictions = Loss.inference_prediction(posterior_outputs)
                 posterior_accuracy = inference_accuracy(posterior_predictions, test_labels)
@@ -315,17 +281,11 @@ def main(arguments):
 
                 posterior_samples = []
                 posterior_weights = []
-                # posterior_loss = criterion(posterior_outputs, test_labels)
-                # loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
-                # posterior_accuracy = prediction_accuracy(posterior_outputs, test_labels)
-                # accuracy_monitor.record_tensorboard(posterior_accuracy, iteration, sess, posterior_writer)
 
             check_point(model, optimizer, iteration, exp_name)
             iteration = iteration + 1
 
-
-
-            # Termination
+           # Termination
             if iteration == num_max_iteration:
                 print('It is finished')
                 exit()
