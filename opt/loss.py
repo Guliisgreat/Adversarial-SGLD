@@ -16,11 +16,11 @@ class CE(object):
 
     def softmax_output(self, inputs):
         prob_inputs = self.softmax(inputs)
-        return prob_inputs.data.numpy()
+        return prob_inputs
 
     def log_softmax_output(self, inputs):
         prob_inputs = self.lsoftmax(inputs)
-        return prob_inputs.data.numpy()
+        return prob_inputs
 
     def inference_prediction(self, inputs):
         prob_inputs = self.softmax(inputs)

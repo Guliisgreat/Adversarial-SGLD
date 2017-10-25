@@ -47,7 +47,7 @@ from tensorboard_monitor.configuration import*
 from tensorboard_monitor.monitor import*
 
 
-def load_configuration(arguments):
+def load_configuration(arguments, name_dataset):
     if arguments['-r']:
         exp_name = arguments['<exp_name>']
         f_model_config = 'model/config/' + exp_name[exp_name.find(':') + 1:].split('-X-')[0] + '.yaml'
@@ -60,7 +60,7 @@ def load_configuration(arguments):
         model_name = os.path.basename(f_model_config).split('.')[0]
         opt_name = os.path.basename(f_opt_config).split('.')[0]
         timestamp = '{:%Y-%m-%d}'.format(datetime.datetime.now())
-        data_name = 'baby_mnist'
+        data_name = name_dataset
         if arguments['--prefix']:
             exp_name = '%s:%s-X-%s-X-%s@%s' % (arguments['<p>'], model_name, opt_name, data_name, timestamp)
         else:
@@ -147,13 +147,18 @@ def posterior_expectation(model,Loss, posterior_samples, posterior_weights, inpu
     outputs_expectation = outputs_weighted_sum / (sum(posterior_weights))
     return outputs_expectation
 
-def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_threshold, learning_rate, batch_size):
+def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_threshold, learning_rate):
     is_collecting = False
     gs = []
     oG = gradient_data.type(torch.FloatTensor)
+    batch_size = oG.size()[0]
+    num_parameter = oG.size()[1]
     for gidx in xrange(oG.size()[0]):
         model.zero_grad()
-        outputs.backward(gradient=oG[gidx][None].repeat(batch_size, 1), retain_variables=True)
+        tt = oG[gidx][None]
+        tmp = oG[gidx][None].repeat(batch_size, 1)
+        gradient_feed = torch.cat((tt,torch.zeros(batch_size-1, num_parameter)))
+        outputs.backward(gradient=gradient_feed, retain_variables=True)
         ps = list(model.parameters())
         g = torch.cat([p.grad.view(-1, 1) for p in ps])
         gs.append(g)
@@ -191,7 +196,7 @@ def main(arguments):
     # Set up
     iteration = 0
     batch_size = 100
-    alpha_threshold = 0.01
+    alpha_threshold = 0.1
     sample_size = 100
     sample_interval = 20
     posterior_samples = []
@@ -199,8 +204,10 @@ def main(arguments):
     validation_interval = 200
     variance_monitor_interval = 50
 
+    name_dataset = 'mnist'
+
     # Load argumentts: Module, Optimizer, Loss_function
-    model, optimizer, Loss, exp_name, model_config, opt_config = load_configuration(arguments)
+    model, optimizer, Loss, exp_name, model_config, opt_config = load_configuration(arguments, name_dataset)
     num_max_iteration = opt_config['max_train_iters']
 
     criterion = nn.CrossEntropyLoss()
@@ -211,17 +218,16 @@ def main(arguments):
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    # Baby_mnist
-    trainset = BabyMnist( train=True, transform=transform)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
-    testset = BabyMnist( train=False, transform=transform)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
-
-    # # minist
-    # trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-    # trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
-    # testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
-    # testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+    if name_dataset == 'Baby_mnist':
+        trainset = BabyMnist( train=True, transform=transform)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+        testset = BabyMnist( train=False, transform=transform)
+        testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+    if name_dataset == 'mnist':
+        trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+        testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+        testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
 
    # Tensorboard
@@ -235,6 +241,7 @@ def main(arguments):
 
    # Training
     while(1):
+        #print(len(posterior_samples))
         for i, data in enumerate(trainloader, 0):
 
             inputs, labels = data
@@ -265,9 +272,10 @@ def main(arguments):
 
             # monitor Variance
             if opt_config['name'] == 'NoisedSGD' and iteration % variance_monitor_interval == 0 :
-                is_collecting, V_s = is_into_langevin_dynamics(model, outputs,  gradient_data, optimizer, alpha_threshold, learning_rate, batch_size)
-                variance_monitor.record_tensorboard(V_s, iteration,sess, train_writer)
+                is_collecting, V_s = is_into_langevin_dynamics(model, outputs,  gradient_data, optimizer, alpha_threshold, learning_rate)
+                variance_monitor.record_tensorboard(np.log10(V_s), iteration,sess, train_writer)
                 if is_collecting == True and iteration %sample_interval == 0:
+
                     posterior_samples, posterior_weights = posterior_sampling(sample_size, model, learning_rate, posterior_samples,
                                                                               posterior_weights)
            # Validation
@@ -291,9 +299,8 @@ def main(arguments):
             # Bayesian Estimation
             if (iteration % validation_interval == 0) and (len(posterior_samples) == sample_size):
                 # Inference
-
                 posterior_outputs = posterior_expectation(model,Loss, posterior_samples, posterior_weights, test_inputs)
-                posterior_loss = Loss.CrossEntropyLoss(posterior_outputs, test_labels)
+                posterior_loss = Loss.cross_entropy_loss(posterior_outputs, test_labels)
                 loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
                 posterior_predictions = Loss.inference_prediction(posterior_outputs)
                 posterior_accuracy = inference_accuracy(posterior_predictions, test_labels)
