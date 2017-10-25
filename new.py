@@ -132,19 +132,22 @@ def inference_accuracy(prediction, labels):
     accuracy = (prediction == labels.data.numpy()).mean().astype(float)
     return accuracy
 
+# need batch
 
 def posterior_expectation(model,Loss, posterior_samples, posterior_weights, inputs ):
     num_posterior_samples = len(posterior_samples)
     outputs_weighted_sum = 0
     # we need to load posterior parameter samples to make inference, but cannot influence the training process
-    copy_model = copy.deepcopy(model)
+    #
+    model.eval()
     for sample_idx in range(num_posterior_samples):
-        copy_model.model.load_state_dict(posterior_samples[sample_idx])
-        outputs_samples =  copy_model.forward(inputs)
+        model.model.load_state_dict(posterior_samples[sample_idx])
+        outputs_samples =  model.forward(inputs)
         outputs_prob = Loss.softmax_output(outputs_samples)
         # outputs_sample --> softmax --> prob
         outputs_weighted_sum = outputs_weighted_sum + outputs_prob*posterior_weights[sample_idx]
-    outputs_expectation = outputs_weighted_sum / (sum(posterior_weights))
+        outputs_expectation = outputs_weighted_sum / (sum(posterior_weights))
+    model.train()
     return outputs_expectation
 
 def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_threshold, learning_rate):
@@ -158,15 +161,24 @@ def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_thr
         tt = oG[gidx][None]
         tmp = oG[gidx][None].repeat(batch_size, 1)
         gradient_feed = torch.cat((tt,torch.zeros(batch_size-1, num_parameter)))
+        #gradient_feed = tmp
         outputs.backward(gradient=gradient_feed, retain_variables=True)
         ps = list(model.parameters())
         g = torch.cat([p.grad.view(-1, 1) for p in ps])
         gs.append(g)
-    gs = torch.cat(gs, 1).t()  ## (N, D) gradient matrix
-    gs_centered = gs - gs.mean(0).expand_as(gs)
-    V_s = (1 / optimizer.correction) * torch.mm(gs_centered, gs_centered.t())  ## (D, D), hopefully V_s in the paper
-    _, s, _ = torch.svd(V_s.data)
-    alpha = s[0] * learning_rate * optimizer.correction / batch_size
+
+    gs_n = torch.cat(gs, 1)
+    gs_mean_n = torch.mean(gs_n,1)
+    gs_center_n = torch.abs(gs_n - gs_mean_n.repeat(1,batch_size))
+    V_s_n = (1/(batch_size))*torch.mm(gs_center_n, gs_center_n.t())
+    _, s, _ = torch.svd(V_s_n.data)
+
+
+    # gs = torch.cat(gs, 1).t()  ## (N, D) gradient matrix
+    # gs_centered = gs - gs.mean(0).expand_as(gs)
+    # V_s = (1 / optimizer.correction) * torch.mm(gs_centered, gs_centered.t())  ## (D, D), hopefully V_s in the paper
+    # _, s, _ = torch.svd(V_s.data)
+    alpha = s[0] * (learning_rate/optimizer.correction) * (optimizer.correction* optimizer.correction) / (4*batch_size)
 
     if alpha < alpha_threshold:  # todo: ...
         is_collecting = True
@@ -195,23 +207,19 @@ def main(arguments):
 
     # Set up
     iteration = 0
-    batch_size = 100
+    batch_size = 20
     alpha_threshold = 0.1
-    sample_size = 100
+    sample_size = 20
     sample_interval = 20
     posterior_samples = []
     posterior_weights = []
     validation_interval = 200
     variance_monitor_interval = 50
+    name_dataset = 'Baby_mnist'
 
-    name_dataset = 'mnist'
-
-    # Load argumentts: Module, Optimizer, Loss_function
+  # Load argumentts: Module, Optimizer, Loss_function
     model, optimizer, Loss, exp_name, model_config, opt_config = load_configuration(arguments, name_dataset)
     num_max_iteration = opt_config['max_train_iters']
-
-    criterion = nn.CrossEntropyLoss()
-
 
   # Load DataSet
     # trainLoader automatically generate training_batch
@@ -228,7 +236,6 @@ def main(arguments):
         trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
         testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
         testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
-
 
    # Tensorboard
     # Set tensorboard_monitor monitors
@@ -256,7 +263,7 @@ def main(arguments):
 
             # gradient_data = store_gradient_data(outputs, criterion, labels)
             # Loss function
-            training_loss = Loss.cross_entropy_loss(outputs,labels)
+            training_loss = Loss.nll_loss(outputs,labels)
             loss_monitor.record_tensorboard(training_loss.data[0],iteration,sess,train_writer)
             # loss = criterion(outputs, labels)
             # accuracy = prediction_accuracy(outputs, labels)
@@ -265,7 +272,7 @@ def main(arguments):
             accuracy_monitor.record_tensorboard(accuracy, iteration,sess, train_writer)
             # Parameter Update
 
-            model.zero_grad()
+            optimizer.zero_grad()
             outputs.backward(gradient = gradient_data, retain_variables = True)
             # training_loss.backward(retain_variables=True)
             optimizer.step()
@@ -287,7 +294,7 @@ def main(arguments):
                 test_inputs, test_labels = Variable(test_inputs), Variable(test_labels)
                 # Inference
                 point_outputs = model.forward(test_inputs)
-                point_loss = Loss.cross_entropy_loss(point_outputs, test_labels)
+                point_loss = Loss.nll_loss(point_outputs, test_labels)
                 loss_monitor.record_tensorboard(point_loss.data[0], iteration, sess, point_writer)
                 point_predictions = Loss.inference_prediction(point_outputs)
                 point_accuracy = inference_accuracy(point_predictions, test_labels)
@@ -300,11 +307,14 @@ def main(arguments):
             if (iteration % validation_interval == 0) and (len(posterior_samples) == sample_size):
                 # Inference
                 posterior_outputs = posterior_expectation(model,Loss, posterior_samples, posterior_weights, test_inputs)
-                posterior_loss = Loss.cross_entropy_loss(posterior_outputs, test_labels)
+                posterior_loss = Loss.nll_loss(posterior_outputs, test_labels)
                 loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
                 posterior_predictions = Loss.inference_prediction(posterior_outputs)
                 posterior_accuracy = inference_accuracy(posterior_predictions, test_labels)
                 accuracy_monitor.record_tensorboard(posterior_accuracy, iteration, sess, posterior_writer)
+
+                posterior_samples = []
+                posterior_weights = []
                 # posterior_loss = criterion(posterior_outputs, test_labels)
                 # loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
                 # posterior_accuracy = prediction_accuracy(posterior_outputs, test_labels)
@@ -312,6 +322,8 @@ def main(arguments):
 
             check_point(model, optimizer, iteration, exp_name)
             iteration = iteration + 1
+
+
 
             # Termination
             if iteration == num_max_iteration:
