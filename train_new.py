@@ -1,7 +1,7 @@
-"""train.py
+"""train_new.py
 Usage:
-    train.py <f_model_config> <f_opt_config>  [--prefix <p>] [--ce] [--db]
-    train.py -r <exp_name> <idx> [--test]
+    train_new.py <f_model_config> <f_opt_config> <dataset> [--prefix <p>] [--ce] [--db] [--cuda]
+    train_new.py -r <exp_name> <idx> [--test]
 
 Arguments:
 
@@ -13,9 +13,8 @@ Example:
     'sgd' ...
     'nsgd' sgd with added Gaussian Noise, but learn-rate not decayed properly
     'sgld' sgd with added Gaussian Noise, and both decayed polynomially
-    python train.py model/config/lr.yaml opt/config/sgd-128-lr.yaml --ce
-    python train.py model/config/lr.yaml opt/config/nsgd-128-lr.yaml --ce
-    python train.py model/config/lr.yaml opt/config/sgld-128-lr.yaml --ce
+
+    python train_new.py model/config/fc1-100.yaml opt/config/nsgd-bdk.yaml babymnist --ce --cuda
 
 Options:
 """
@@ -33,7 +32,7 @@ import yaml
 
 import datetime
 from opt.loss import *
-from model.fc import fc, lr
+from model.fc import *
 from opt.nsgd import NoisedSGD
 import torch.optim as optim
 from dataset.BabyMnist import BabyMnist
@@ -45,7 +44,7 @@ import torch.nn as nn
 
 from tensorboard_monitor.configuration import*
 from tensorboard_monitor.monitor import*
-
+from tqdm import tqdm
 
 def load_configuration(arguments, name_dataset):
     if arguments['-r']:
@@ -81,7 +80,8 @@ def load_configuration(arguments, name_dataset):
 
     ## Model
     model = eval(model_config['name'])(**model_config['kwargs'])
-    # model.type(torch.FloatTensor)
+    if arguments['--cuda']:
+        model.type(torch.cuda.FloatTensor)
     ## Optimizer
     opt = eval(opt_config['name'])(model.parameters(), **opt_config['kwargs'])
     ## loss
@@ -137,11 +137,11 @@ def posterior_expectation(model,Loss, posterior_samples, posterior_weights, inpu
         outputs_prob = Loss.softmax_output(outputs_samples)
         # outputs_sample --> softmax --> prob
         outputs_weighted_sum = outputs_weighted_sum + outputs_prob*posterior_weights[sample_idx]
-        outputs_expectation = outputs_weighted_sum / (sum(posterior_weights))
     model.train()
+    outputs_expectation = outputs_weighted_sum / (sum(posterior_weights))
     return outputs_expectation #(n,d)
 
-def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_threshold, learning_rate):
+def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, learning_rate,alpha_threshold,iteration,sess, train_writer):
     is_collecting = False
     gs = []
     oG = gradient_data.type(torch.FloatTensor)
@@ -164,7 +164,8 @@ def is_into_langevin_dynamics(model,outputs, gradient_data, optimizer, alpha_thr
 
     if alpha < alpha_threshold:  # todo: ...
         is_collecting = True
-    return is_collecting, s[0]
+    variance_monitor.record_tensorboard(np.log10(s[0]), iteration,sess, train_writer)
+    return is_collecting
 
 def posterior_sampling(sample_size, model,learning_rate, posterior_samples, posterior_weights):
     posterior_samples.append(copy.deepcopy(model.model.state_dict()))
@@ -179,25 +180,28 @@ def main(arguments):
     # Set up
     iteration = 0
     batch_size = 100
-    alpha_threshold = 0.5
-    sample_size = 20
+    # alpha_threshold = .5
+    burnin_iters= 5000
+    sample_size = 100
     sample_interval = 20
     posterior_samples = []
     posterior_weights = []
-    validation_interval = 200
+    validation_interval = 2000
     variance_monitor_interval = 50
-    name_dataset = 'mnist'
+    name_dataset = arguments['<dataset>']
+    is_collecting=False
 
   # Load argumentts: Module, Optimizer, Loss_function
     model, optimizer, Loss, exp_name, model_config, opt_config = load_configuration(arguments, name_dataset)
     num_max_iteration = opt_config['max_train_iters']
+    log_folder = os.path.join('./logs/new', exp_name)
 
   # Load DataSet
     # trainLoader automatically generate training_batch
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    if name_dataset == 'Baby_mnist':
+    if name_dataset == 'babymnist':
         trainset = BabyMnist( train=True, transform=transform)
         trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
         testset = BabyMnist( train=False, transform=transform)
@@ -223,6 +227,8 @@ def main(arguments):
         for i, data in enumerate(trainloader, 0):
 
             inputs, labels = data
+            if arguments['--cuda']:
+                inputs = inputs.type(torch.cuda.FloatTensor)
             inputs, labels = Variable(inputs), Variable(labels)
 
             # Update learning rate
@@ -237,29 +243,35 @@ def main(arguments):
             # Loss function
             training_loss = Loss.nll_loss(outputs,labels)
             loss_monitor.record_tensorboard(training_loss.data[0],iteration,sess,train_writer)
+
+
             training_predictions = Loss.inference_prediction(outputs)
             accuracy = inference_accuracy(training_predictions, labels)
             accuracy_monitor.record_tensorboard(accuracy, iteration,sess, train_writer)
+            accuracy_monitor.record_matplot( 1 - accuracy, iteration, 'train')
 
             # Parameter Update
             optimizer.zero_grad()
+            if arguments['--cuda']:
+                gradient_data = gradient_data.type(torch.cuda.FloatTensor)
             outputs.backward(gradient = gradient_data, retain_variables = True)
             optimizer.step()
 
             # monitor Variance
-            if opt_config['name'] == 'NoisedSGD' and iteration % variance_monitor_interval == 0 :
-                is_collecting, V_s = is_into_langevin_dynamics(model, outputs,  gradient_data, optimizer, alpha_threshold, learning_rate)
-                variance_monitor.record_tensorboard(np.log10(V_s), iteration,sess, train_writer)
-                if is_collecting == True and iteration %sample_interval == 0:
-
-                    posterior_samples, posterior_weights = posterior_sampling(sample_size, model, learning_rate, posterior_samples,
-                                                                              posterior_weights)
+            if opt_config['name'] == 'NoisedSGD' and is_collecting==False and iteration % variance_monitor_interval == 0 :
+                # is_collecting = is_into_langevin_dynamics(model, outputs,  gradient_data, optimizer, learning_rate,alpha_threshold,iteration,sess, train_writer)
+                is_collecting = iteration >= burnin_iters
+            if is_collecting == True and iteration %sample_interval == 0:
+                posterior_samples, posterior_weights = posterior_sampling(sample_size, model, learning_rate, posterior_samples,
+                                                                          posterior_weights)
            # Validation
             # Point Estimation
             if iteration % validation_interval == 0:
                 # Load data
                 dataiter = iter(testloader)
                 test_inputs, test_labels = dataiter.next()
+                if arguments['--cuda']:
+                    test_inputs = test_inputs.type(torch.cuda.FloatTensor)
                 test_inputs, test_labels = Variable(test_inputs), Variable(test_labels)
                 # Inference
                 point_outputs = model.forward(test_inputs)
@@ -268,20 +280,24 @@ def main(arguments):
                 point_predictions = Loss.inference_prediction(point_outputs)
                 point_accuracy = inference_accuracy(point_predictions, test_labels)
                 accuracy_monitor.record_tensorboard(point_accuracy, iteration, sess, point_writer)
+                accuracy_monitor.record_matplot(1 - point_accuracy, iteration, 'point_estimation')
 
-            # Bayesian Estimation
-            if (iteration % validation_interval == 0) and (len(posterior_samples) == sample_size):
-                # Inference
-                posterior_outputs = posterior_expectation(model,Loss, posterior_samples, posterior_weights, test_inputs)
-                posterior_loss = Loss.CrossEntropyLoss(posterior_outputs, test_labels)
-                loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
-                posterior_predictions = Loss.inference_prediction(posterior_outputs)
-                posterior_accuracy = inference_accuracy(posterior_predictions, test_labels)
-                accuracy_monitor.record_tensorboard(posterior_accuracy, iteration, sess, posterior_writer)
+                # Bayesian Estimation
+                posterior_accuracy = 0
+                if len(posterior_samples) >0:
+                    # Inference
+                    posterior_outputs = posterior_expectation(model,Loss, posterior_samples, posterior_weights, test_inputs)
+                    posterior_loss = Loss.CrossEntropyLoss(posterior_outputs, test_labels)
+                    loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
+                    posterior_predictions = Loss.inference_prediction(posterior_outputs)
+                    posterior_accuracy = inference_accuracy(posterior_predictions, test_labels)
+                    accuracy_monitor.record_tensorboard(posterior_accuracy, iteration, sess, posterior_writer)
+                    accuracy_monitor.record_matplot(1 - posterior_accuracy, iteration, 'bayesian')
 
-                posterior_samples = []
-                posterior_weights = []
-
+                if iteration % 5000 == 0:
+                    print (iteration, accuracy,point_accuracy, posterior_accuracy)
+                    accuracy_monitor.save_plot_matplot(log_folder, iteration)
+                #posterior_samples = []
             check_point(model, optimizer, iteration, exp_name)
             iteration = iteration + 1
 
@@ -289,6 +305,11 @@ def main(arguments):
             if iteration == num_max_iteration:
                 print('It is finished')
                 exit()
+            idx = iteration
+            if idx>0 and idx%(sample_size*sample_interval*10)==0:
+                def _flatten_npyfy(posterior_samples):
+                    return np.array([np.concatenate([p.cpu().numpy().ravel() for p in sample.values()]) for sample in posterior_samples])
+                np.save('./saves/%s/params_%i'%(exp_name, idx//(sample_size*sample_interval)),_flatten_npyfy(posterior_samples))
 
 
 

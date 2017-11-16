@@ -10,7 +10,7 @@ class NoisedSGD(Optimizer):
 
     def __init__(self, params, lr=required, dataset_size=required,momentum=0, dampening=0,
                  weight_decay=0, nesterov=False, ):
-        self.correction = dataset_size ## for the 2 sources of noise in sgld to be balanced
+        self.correction = dataset_size / 2 ## for the 2 sources of noise in sgld to be balanced
         defaults = dict(lr=lr, momentum=momentum, dampening=dampening,
                         weight_decay=weight_decay, nesterov=nesterov)
         if nesterov and (momentum <= 0 or dampening != 0):

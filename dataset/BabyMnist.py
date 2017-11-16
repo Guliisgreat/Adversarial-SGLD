@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import print_function, division
 from sklearn import datasets, svm, metrics
 import numpy as np
 from numpy import argmax
@@ -26,11 +26,11 @@ class BabyMnist(data.Dataset):
         self.train = train  # training set or test set
 
         self.data = datasets.load_digits()
-        self.image = self.data.images.reshape((-1,8,8,1))
-        self.image = self.image[0:1701,:,:,:]  # avoid conflict with batch size
+        self.image = self.data.images.reshape((-1,8,8,1)) * (255/16)
+        self.image = self.image[0:751,:,:,:]  # avoid conflict with batch size
         self.label = self.data.target
-        self.label = self.label[0:1701]
-        self.size_test_dataset = 100
+        self.label = self.label[0:751]
+        self.size_test_dataset = 250
 
 
         if self.train:

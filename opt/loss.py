@@ -12,8 +12,9 @@ class CE(object):
         self.lsoftmax = torch.nn.LogSoftmax()
         self.softmax = torch.nn.Softmax()
         self.nll = torch.nn.NLLLoss()
-        self.CrossEntropyLoss = torch.nn.CrossEntropyLoss()
-
+        self.CEL = torch.nn.CrossEntropyLoss()
+    def CrossEntropyLoss(self, outputs, labels):
+        return self.CEL(outputs.type(torch.FloatTensor), labels)
     def softmax_output(self, inputs):
         prob_inputs = self.softmax(inputs)
         return prob_inputs
@@ -24,7 +25,7 @@ class CE(object):
 
     def inference_prediction(self, inputs):
         prob_inputs = self.softmax(inputs)
-        prediction = prob_inputs.data.numpy().argmax(1)
+        prediction = prob_inputs.data.cpu().numpy().argmax(1)
         return prediction
 
     def cross_entropy_loss(self, inputs, label):
@@ -33,7 +34,7 @@ class CE(object):
         return cross_e
 
     def nll_loss(self, inputs, label):
-        prob_inputs = self.lsoftmax(inputs)
+        prob_inputs = self.lsoftmax(inputs.type(torch.FloatTensor))
         nll = self.nll(prob_inputs, label)
         return nll
 
@@ -42,10 +43,27 @@ class CE(object):
         inputs = inputs.data.clone().type(torch.FloatTensor)
         inputs = Variable(inputs, requires_grad=True)
         prob_inputs = self.lsoftmax(inputs)
-        cross_e_loss = self.CrossEntropyLoss(prob_inputs,label)
+        cross_e_loss = self.CEL(prob_inputs,label)
         cross_e_loss.backward()
         gradient_data = inputs.grad.data
         return gradient_data
 
+    def train(self, F, Y_batch):
+        tv_F = Variable(F, requires_grad=True)
+        tv_Y = Variable(torch.LongTensor(Y_batch.numpy().argmax(1)))
+        py_x = self.lsoftmax(tv_F)
+        loss = self.nll(py_x, tv_Y)
+        ##
+        loss.backward()
+        G = tv_F.grad.data
+        train_pred = py_x.data.numpy().argmax(1)
+        return loss.data[0], G, train_pred
 
-
+    def infer(self, model, X_val, ret_proba=False):
+        py_x = self.softmax(model.forward(X_val))
+        proba = py_x.data.cpu().numpy()
+        val_pred = proba.argmax(1)
+        if ret_proba:
+            return val_pred, proba
+        else:
+            return val_pred

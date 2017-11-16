@@ -1,2 +1,1 @@
-# asgld# Adversarial-SGLD
-# Adversarial-SGLD
+# asgld

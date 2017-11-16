@@ -1,0 +1,3 @@
+name: cnn
+kwargs:
+  Hn: 32

@@ -1,3 +1,4 @@
 name: fc
 kwargs:
-  Hn: 1000
+  Hn: 50
+  input_dim: 784

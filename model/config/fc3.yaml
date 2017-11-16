@@ -1,0 +1,4 @@
+name: fc3
+kwargs:
+  Hn: 20
+  input_dim: 64
