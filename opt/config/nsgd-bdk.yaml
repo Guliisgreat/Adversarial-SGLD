@@ -1,16 +1,16 @@
-node1: &bs 128
-node1: &dataset_size 60000
+node1: &dataset_size 50000
+node1: &bs 100
+
 
 dataset_size: *dataset_size
 name: 'NoisedSGD'
 kwargs:
-  lr: 0.001
+  lr: .05
   dataset_size: *dataset_size
   momentum: 0.0
-  weight_decay: 0.000
+  weight_decay: 0.001
 batcher_name: MiniBatcher
 batcher_kwargs:
   batch_size: *bs
 max_train_iters: 1000000
-# lrsche: [[100000, .1],[10000, .1]]
-lrpoly: [1, 1000, 1] #(a,b,g) for a(b+t)^(-g)
+# lrsche: [[3000, .1],[10000, .1]]
