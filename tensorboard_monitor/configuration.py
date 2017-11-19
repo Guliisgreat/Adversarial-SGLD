@@ -4,9 +4,9 @@ import os
 
 def initial_tensorboard(exp_name):
     sess = tf.InteractiveSession()
-    if not os.path.exists('./logs/new'):
-        os.mkdir('./logs/new')
-    log_folder = os.path.join('./logs/new', exp_name)
+    if not os.path.exists('./logs'):
+        os.mkdir('./logs')
+    log_folder = os.path.join('./logs', exp_name)
     # remove existing log folder for the same model.
     if os.path.exists(log_folder):
         import shutil

@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 
+
 class Monitor(object):
     def __init__(self, name):
         super(Monitor, self).__init__()
@@ -23,16 +24,13 @@ class Monitor(object):
 
     def record_tensorboard(self, data, iteration, sess, object_writer):
 
-
         record = sess.run(self.variable_in_computation, feed_dict={self.node_on_graph: data})
         return object_writer.add_summary(record, iteration)
 
 
     def record_matplot(self, data, iteration, writer):
-        # data = np.log10(data)
-        # iteration = np.log10(iteration+1)
 
-        if iteration >= 10000:
+        if iteration >= 1000:
             if writer == 'train':
                 self.list_data_train.append(data)
                 self.list_iteration_train.append(iteration)
@@ -46,9 +44,7 @@ class Monitor(object):
 
     def save_plot_matplot(self, log_folder, iteration):
         plt.clf()
-        #iteration = self.list_iteration_train[-1]
-
-        #plt.plot(self.list_iteration_train, self.list_data_train, 'b', label = 'training')
+        plt.plot(self.list_iteration_train, self.list_iteration_train, 'b', label = 'training')
         plt.plot(self.list_iteration_point_estimate, self.list_data_point_estimate, 'g', label = 'point estimation')
         plt.plot(self.list_iteration_bayesian, self.list_data_bayesian, 'r', label = 'bayesian')
 
@@ -62,6 +58,13 @@ class Monitor(object):
         plt.savefig(os.path.join(log_folder, self.name + '_%g.png' % iteration))
 
 
+    def save_result_numpy(self, log_folder):
+        train_result = np.array([self.list_iteration_train, self.list_iteration_train])
+        point_estimate_result = np.array([self.list_iteration_point_estimate, self.list_data_point_estimate])
+        bayesian_result = np.array([self.list_iteration_bayesian, self.list_data_bayesian])
+
+        outfile = os.path.join(log_folder, self.name)
+        np.savez(outfile, train_result = train_result, point_estimate_result = point_estimate_result, bayesian_result = bayesian_result)
 
 
 

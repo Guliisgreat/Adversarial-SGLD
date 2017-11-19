@@ -46,6 +46,10 @@ from model.cnn import *
 # from model.cnn import *
 import cPickle as pkl
 from cleverhans.utils_mnist import data_mnist
+
+from tensorboard_monitor.configuration import*
+from tensorboard_monitor.monitor import*
+
 #### magic
 NUM_VALID =10000 
 tft = lambda x:torch.FloatTensor(x)
@@ -96,7 +100,7 @@ def main(arguments):
     # Dataset (X size(N,D) , Y size(N,K))
     ## Model
     model = eval(model_config['name'])(**model_config['kwargs'])
-    model.type(torch.cuda.FloatTensor)
+    model.type(torch.FloatTensor)
     ## Optimizer
     opt = eval(opt_config['name'])(model.parameters(), **opt_config['kwargs'])
 
@@ -109,26 +113,30 @@ def main(arguments):
             raise NotImplementedError()
 
 
-    ## tensorboard
-    #ph
-    ph_accuracy = tf.placeholder(tf.float32,  name='accuracy')
-    ph_loss = tf.placeholder(tf.float32,  name='loss')
-    if not os.path.exists('./logs'):
-        os.mkdir('./logs')
-    tf_acc = tf.summary.scalar('accuracy', ph_accuracy)
-    tf_loss = tf.summary.scalar('loss', ph_loss)
-    
-    log_folder = os.path.join('./logs', exp_name)
-    # remove existing log folder for the same model.
-    if os.path.exists(log_folder):
-        import shutil
-        shutil.rmtree(log_folder, ignore_errors=True)
+    cross_e = Monitor('cross_e')
+    accuracy = Monitor('accuracy')
+    sess, train_writer, point_writer, posterior_writer = initial_tensorboard(exp_name)
 
-    sess = tf.InteractiveSession()   
-
-    train_writer = tf.summary.FileWriter(os.path.join(log_folder, 'train'), sess.graph)
-    val_writer = tf.summary.FileWriter(os.path.join(log_folder, 'val'), sess.graph)
-
+    # ## tensorboard
+    # #ph
+    # ph_accuracy = tf.placeholder(tf.float32,  name='accuracy')
+    # ph_loss = tf.placeholder(tf.float32,  name='loss')
+    # if not os.path.exists('./logs'):
+    #     os.mkdir('./logs')
+    # tf_acc = tf.summary.scalar('accuracy', ph_accuracy)
+    # tf_loss = tf.summary.scalar('loss', ph_loss)
+    #
+    # log_folder = os.path.join('./logs', exp_name)
+    # # remove existing log folder for the same model.
+    # if os.path.exists(log_folder):
+    #     import shutil
+    #     shutil.rmtree(log_folder, ignore_errors=True)
+    #
+    # sess = tf.InteractiveSession()
+    #
+    # train_writer = tf.summary.FileWriter(os.path.join(log_folder, 'train'), sess.graph)
+    # val_writer = tf.summary.FileWriter(os.path.join(log_folder, 'val'), sess.graph)
+    #
     batcher = eval(opt_config['batcher_name'])(X.size()[0], **opt_config['batcher_kwargs'])
 
     ## Loss
@@ -167,7 +175,7 @@ def main(arguments):
                 opt.load_state_dict(sd)
 
             idxs = batcher.next(idx)
-            X_batch = X[torch.LongTensor(idxs)].type(torch.cuda.FloatTensor)
+            X_batch = X[torch.LongTensor(idxs)].type(torch.FloatTensor)
             Y_batch = Y[torch.LongTensor(idxs)]#.type(torch.cuda.FloatTensor)
             ## network
             tv_F = model.forward(X_batch)
@@ -176,7 +184,7 @@ def main(arguments):
             loss, G, train_pred = Loss.train(F, Y_batch)
 
             model.zero_grad()
-            tv_F.backward(gradient=G.type(torch.cuda.FloatTensor),retain_variables=True)
+            tv_F.backward(gradient=G.type(torch.FloatTensor),retain_variables=True)
             opt.step()
 
 
@@ -184,12 +192,16 @@ def main(arguments):
             #accuracy
             train_gt = Y[torch.LongTensor(idxs)].numpy().argmax(1)
             train_accuracy = (train_pred[batcher.start_unlabelled:] == train_gt[batcher.start_unlabelled:]).mean()
-
-            # summarize
-            acc= sess.run(tf_acc, feed_dict={ph_accuracy:train_accuracy})
-            loss = sess.run(tf_loss, feed_dict={ph_loss:loss})
-            tmp = Y_batch.numpy()
-            train_writer.add_summary(acc+loss, idx)
+            accuracy.record_tensorboard(train_accuracy, idx, sess, train_writer)
+            cross_e.record_tensorboard(loss, idx, sess, train_writer)
+            # # summarize
+            # acc= sess.run(tf_acc, feed_dict={ph_accuracy:train_accuracy})
+            # loss = sess.run(tf_loss, feed_dict={ph_loss:loss})
+            # tmp = Y_batch.numpy()
+            # train_writer.add_summary(acc+loss, idx)
+            #
+            # ce_bayes = Monitor('bayesian')
+            # sess, train_writer, point_writer, posterior_writer = initial_tensorboard(exp_name)
 
             ## monitor gradient variance
             ## TODO: this is extremely stupid...
@@ -224,27 +236,40 @@ def main(arguments):
             #validate
             if idx>0 and idx%500==0:
                 curr_state = model.state_dict()
+
+
+
+
                 def _validate_batch(model, X_val_batch, Y_val_batch):
                     model.eval()
-                    val_pred = Loss.infer(model, Variable(torch.FloatTensor(X_val_batch)).type(torch.cuda.FloatTensor))
+                    val_pred = Loss.infer(model, Variable(torch.FloatTensor(X_val_batch)).type(torch.FloatTensor))
                     val_accuracy = np.mean(Y_val_batch.argmax(1) == val_pred)
                     model.train()
                     return val_accuracy
                 
 
+
                 val_batch_size = batcher.batch_size
                 val_batches = Y_val.shape[0] // val_batch_size
                 v1 = []
+
+
+
                 for vidx in xrange(val_batches):
                     val_accuracy = _validate_batch(model, X_val[vidx*val_batch_size:(vidx+1)*val_batch_size], Y_val[vidx*val_batch_size:(vidx+1)*val_batch_size])
                     v1.append(val_accuracy)
+
+
                 def _validate_batch_bayes(posterior_samples,posterior_weights, X_val_batch, Y_val_batch):
                     model.eval()
                     acc_proba = None
+                    # loss_sum = 0
                     for sample_idx in xrange(len(posterior_samples)):
                         p_sample = posterior_samples[sample_idx]
                         model.load_state_dict(p_sample)
-                        _,proba = Loss.infer(model, Variable(torch.FloatTensor(X_val_batch)).type(torch.cuda.FloatTensor), ret_proba=True)
+                        _,proba = Loss.infer(model, Variable(torch.FloatTensor(X_val_batch)).type(torch.FloatTensor),  ret_proba=True)
+
+
                         if acc_proba is None:
                             acc_proba = posterior_weights[sample_idx] * proba
                         else:
@@ -252,18 +277,33 @@ def main(arguments):
                     model.train()
                     val_pred = acc_proba.argmax(1)    
                     val_accuracy = np.mean(Y_val_batch.argmax(1) == val_pred)
+
                     return val_accuracy
+
+
+
+
+
                 bayes_v = []
                 if is_collecting:
                     for vidx in xrange(val_batches):
                         val_accuracy = _validate_batch_bayes(posterior_samples[-sample_size:],posterior_weights[-sample_size:], X_val[vidx*val_batch_size:(vidx+1)*val_batch_size], Y_val[vidx*val_batch_size:(vidx+1)*val_batch_size])
                         bayes_v.append(val_accuracy)
+
+
+
                 val_accuracy = np.mean(v1)
                 bayes_acc = np.mean(bayes_v)
-                print (val_accuracy, bayes_acc)
-                acc= sess.run(tf_acc, feed_dict={ph_accuracy:val_accuracy})
-                val_writer.add_summary(acc, idx)
-                val_errors.append(val_accuracy)
+                accuracy.record_tensorboard(val_accuracy, idx, sess, point_writer)
+                accuracy.record_tensorboard(bayes_acc, idx, sess, posterior_writer)
+
+
+
+
+                # print (val_accuracy, bayes_acc)
+                # acc= sess.run(tf_acc, feed_dict={ph_accuracy:val_accuracy})
+                # val_writer.add_summary(acc, idx)
+                # val_errors.append(val_accuracy)
                 if val_accuracy > best_val_acc:
                     best_val_acc = val_accuracy
                     name = './saves/%s/model_best.t7'%(exp_name)
@@ -278,7 +318,7 @@ def main(arguments):
                 print (name)
                 model.save(name)
                 torch.save(opt.state_dict(), './saves/%s/opt_%i.t7'%(exp_name,idx))
-    pkl.dump(val_errors, open(os.path.join(log_folder, 'val.log'), 'wb'))
+    #pkl.dump(val_errors, open(os.path.join(log_folder, 'val.log'), 'wb'))
     return best_val_acc
 
 
