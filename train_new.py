@@ -30,6 +30,9 @@ import copy
 from docopt import docopt
 import yaml
 
+from tensorboard_monitor.configuration import*
+from tensorboard_monitor.monitor import*
+
 import datetime
 from opt.loss import *
 from model.fc import *
@@ -42,8 +45,6 @@ import torchvision
 import torchvision.transforms as transforms
 import torch.nn as nn
 
-from tensorboard_monitor.configuration import*
-from tensorboard_monitor.monitor import*
 from tqdm import tqdm
 
 def load_configuration(arguments, name_dataset):
@@ -181,12 +182,12 @@ def main(arguments):
     iteration = 0
     batch_size = 100
     # alpha_threshold = .5
-    burnin_iters= 5000
-    sample_size = 100
+    burnin_iters= 500
+    sample_size = 50
     sample_interval = 20
     posterior_samples = []
     posterior_weights = []
-    validation_interval = 2000
+    validation_interval = 5000
     variance_monitor_interval = 50
     name_dataset = arguments['<dataset>']
     is_collecting=False
@@ -194,7 +195,8 @@ def main(arguments):
   # Load argumentts: Module, Optimizer, Loss_function
     model, optimizer, Loss, exp_name, model_config, opt_config = load_configuration(arguments, name_dataset)
     num_max_iteration = opt_config['max_train_iters']
-    log_folder = os.path.join('./logs/new', exp_name)
+
+    log_folder = os.path.join('./logs', exp_name)
 
   # Load DataSet
     # trainLoader automatically generate training_batch
@@ -203,14 +205,16 @@ def main(arguments):
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
     if name_dataset == 'babymnist':
         trainset = BabyMnist( train=True, transform=transform)
-        trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=50, shuffle=True, num_workers=2)
         testset = BabyMnist( train=False, transform=transform)
-        testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+        testloader = torch.utils.data.DataLoader(testset, batch_size=25, shuffle=False, num_workers=2)
     if name_dataset == 'mnist':
         trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
         trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
         testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
         testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+        num_train = trainset.__len__()
+        num_test = testset.__len__()
 
    # Tensorboard
     # Set tensorboard_monitor monitors
@@ -241,14 +245,13 @@ def main(arguments):
             gradient_data = Loss.store_gradient_data(outputs,labels)
 
             # Loss function
-            training_loss = Loss.nll_loss(outputs,labels)
+            training_loss = Loss.cross_entropy_loss(outputs,labels)
             loss_monitor.record_tensorboard(training_loss.data[0],iteration,sess,train_writer)
-
-
+            #loss_monitor.record_matplot(training_loss.data[0], iteration, 'train')
             training_predictions = Loss.inference_prediction(outputs)
             accuracy = inference_accuracy(training_predictions, labels)
             accuracy_monitor.record_tensorboard(accuracy, iteration,sess, train_writer)
-            accuracy_monitor.record_matplot( 1 - accuracy, iteration, 'train')
+            #accuracy_monitor.record_matplot(1-accuracy, iteration, 'train')
 
             # Parameter Update
             optimizer.zero_grad()
@@ -266,52 +269,88 @@ def main(arguments):
                                                                           posterior_weights)
            # Validation
             # Point Estimation
-            if iteration % validation_interval == 0:
-                # Load data
-                dataiter = iter(testloader)
-                test_inputs, test_labels = dataiter.next()
-                if arguments['--cuda']:
-                    test_inputs = test_inputs.type(torch.cuda.FloatTensor)
-                test_inputs, test_labels = Variable(test_inputs), Variable(test_labels)
-                # Inference
-                point_outputs = model.forward(test_inputs)
-                point_loss = Loss.nll_loss(point_outputs, test_labels)
-                loss_monitor.record_tensorboard(point_loss.data[0], iteration, sess, point_writer)
-                point_predictions = Loss.inference_prediction(point_outputs)
-                point_accuracy = inference_accuracy(point_predictions, test_labels)
-                accuracy_monitor.record_tensorboard(point_accuracy, iteration, sess, point_writer)
-                accuracy_monitor.record_matplot(1 - point_accuracy, iteration, 'point_estimation')
+            if (iteration>= 5000) & (iteration % validation_interval == 0):
+
+                point_accuracy = []
+                point_loss = []
+                posterior_accuracy = []
+                posterior_loss = []
+                posterior_flag = 0
+
+                for i, data in enumerate(testloader, 0):
+                    # Load data
+                    #dataiter = iter(testloader)
+                    #test_inputs, test_labels = dataiter.next()
+                    test_inputs, test_labels = data
+                    if arguments['--cuda']:
+                        test_inputs = test_inputs.type(torch.cuda.FloatTensor)
+                    test_inputs, test_labels = Variable(test_inputs), Variable(test_labels)
+                    # Inference
+                    point_outputs = model.forward(test_inputs)
+                    point_loss_batch = Loss.cross_entropy_loss(point_outputs, test_labels)
+                    point_loss.append(point_loss_batch.data[0])
+                    #loss_monitor.record_tensorboard(point_loss_.data[0], iteration, sess, point_writer)
+                    #loss_monitor.record_matplot(point_loss.data[0], iteration, 'point_estimation')
+
+                    point_predictions = Loss.inference_prediction(point_outputs)
+                    point_accuracy_batch = inference_accuracy(point_predictions, test_labels)
+                    point_accuracy.append(point_accuracy_batch)
+                    # accuracy_monitor.record_tensorboard(point_accuracy, iteration, sess, point_writer)
+                    # accuracy_monitor.record_matplot(100*(1-point_accuracy), iteration, 'point_estimation')
 
                 # Bayesian Estimation
-                posterior_accuracy = 0
-                if len(posterior_samples) >0:
-                    # Inference
-                    posterior_outputs = posterior_expectation(model,Loss, posterior_samples, posterior_weights, test_inputs)
-                    posterior_loss = Loss.CrossEntropyLoss(posterior_outputs, test_labels)
-                    loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
-                    posterior_predictions = Loss.inference_prediction(posterior_outputs)
-                    posterior_accuracy = inference_accuracy(posterior_predictions, test_labels)
-                    accuracy_monitor.record_tensorboard(posterior_accuracy, iteration, sess, posterior_writer)
-                    accuracy_monitor.record_matplot(1 - posterior_accuracy, iteration, 'bayesian')
+                    if len(posterior_samples) >0:
+                        # Inference
+                        posterior_outputs = posterior_expectation(model,Loss, posterior_samples, posterior_weights, test_inputs)
+                        posterior_loss_batch = Loss.CrossEntropyLoss(posterior_outputs, test_labels)
+                        posterior_loss .append(posterior_loss_batch.data[0])
+                        #loss_monitor.record_tensorboard(posterior_loss.data[0], iteration, sess, posterior_writer)
+                        #loss_monitor.record_matplot(posterior_loss.data[0], iteration, 'bayesian')
 
-                if iteration % 5000 == 0:
-                    print (iteration, accuracy,point_accuracy, posterior_accuracy)
-                    accuracy_monitor.save_plot_matplot(log_folder, iteration)
-                #posterior_samples = []
-            check_point(model, optimizer, iteration, exp_name)
-            iteration = iteration + 1
+                        posterior_predictions = Loss.inference_prediction(posterior_outputs)
+                        #posterior_accuracy = inference_accuracy(posterior_predictions, test_labels)
+                        posterior_accuracy_batch = inference_accuracy(posterior_predictions, test_labels)
+                        posterior_accuracy.append(posterior_accuracy_batch)
+
+                        posterior_flag = 1
+                        # accuracy_monitor.record_tensorboard(posterior_accuracy, iteration, sess, posterior_writer)
+                        # accuracy_monitor.record_matplot(100*(1 - posterior_accuracy), iteration, 'bayesian')
+
+
+                point_accuracy = np.mean(point_accuracy)
+                point_loss = np.mean(point_loss)
+                accuracy_monitor.record_tensorboard(point_accuracy, iteration, sess, point_writer)
+                loss_monitor.record_tensorboard(point_loss, iteration, sess, point_writer)
+
+                if posterior_flag ==1:
+                    posterior_accuracy = np.mean(posterior_accuracy)
+                    posterior_loss = np.mean(posterior_loss)
+                    accuracy_monitor.record_tensorboard(posterior_accuracy, iteration, sess, posterior_writer)
+                    loss_monitor.record_tensorboard(posterior_loss, iteration, sess, posterior_writer)
+                    posterior_flag = 0
+
+
+                print (iteration, accuracy,point_accuracy, posterior_accuracy)
 
            # Termination
             if iteration == num_max_iteration:
+                #accuracy_monitor.save_result_numpy(log_folder)
                 print('It is finished')
                 exit()
+
+
+            # if (iteration>=2000) & (iteration % 2000 ==0):
+            #     accuracy_monitor.save_plot_matplot(log_folder, iteration)
+
+
             idx = iteration
-            if idx>0 and idx%(sample_size*sample_interval*10)==0:
+            if idx>0 and idx%(sample_size*sample_interval)==0:
                 def _flatten_npyfy(posterior_samples):
                     return np.array([np.concatenate([p.cpu().numpy().ravel() for p in sample.values()]) for sample in posterior_samples])
                 np.save('./saves/%s/params_%i'%(exp_name, idx//(sample_size*sample_interval)),_flatten_npyfy(posterior_samples))
 
-
+            check_point(model, optimizer, iteration, exp_name)
+            iteration = iteration + 1
 
 
 if __name__ == '__main__':

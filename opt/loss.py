@@ -13,10 +13,8 @@ class CE(object):
         self.softmax = torch.nn.Softmax()
         self.nll = torch.nn.NLLLoss()
         self.CEL = torch.nn.CrossEntropyLoss()
-
     def CrossEntropyLoss(self, outputs, labels):
         return self.CEL(outputs.type(torch.FloatTensor), labels)
-
     def softmax_output(self, inputs):
         prob_inputs = self.softmax(inputs)
         return prob_inputs
@@ -45,8 +43,8 @@ class CE(object):
         inputs = inputs.data.clone().type(torch.FloatTensor)
         inputs = Variable(inputs, requires_grad=True)
         prob_inputs = self.lsoftmax(inputs)
-        cross_e_loss = self.CEL(prob_inputs,label)
-        cross_e_loss.backward()
+        nll_loss = self.nll(prob_inputs,label)
+        nll_loss.backward()
         gradient_data = inputs.grad.data
         return gradient_data
 
@@ -62,11 +60,7 @@ class CE(object):
         return loss.data[0], G, train_pred
 
     def infer(self, model, X_val, ret_proba=False):
-
-
         py_x = self.softmax(model.forward(X_val))
-        # loss = self.CrossEntropyLoss(py_x,tv_Y)
-
         proba = py_x.data.cpu().numpy()
         val_pred = proba.argmax(1)
         if ret_proba:

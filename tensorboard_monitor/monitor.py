@@ -30,7 +30,7 @@ class Monitor(object):
 
     def record_matplot(self, data, iteration, writer):
 
-        if iteration >= 1000:
+        if iteration >= 2000:
             if writer == 'train':
                 self.list_data_train.append(data)
                 self.list_iteration_train.append(iteration)
@@ -44,16 +44,17 @@ class Monitor(object):
 
     def save_plot_matplot(self, log_folder, iteration):
         plt.clf()
-        plt.plot(self.list_iteration_train, self.list_iteration_train, 'b', label = 'training')
+        plt.plot(self.list_iteration_train, self.list_data_train, 'b', label = 'training')
         plt.plot(self.list_iteration_point_estimate, self.list_data_point_estimate, 'g', label = 'point estimation')
         plt.plot(self.list_iteration_bayesian, self.list_data_bayesian, 'r', label = 'bayesian')
 
         plt.xlabel('iteration')
         plt.ylabel(self.name)
-        if self.name == 'cross_entropy':
-            plt.legend(loc='upper right')
-        else:
-            plt.legend(loc='lower right')
+        # if self.name == 'cross_entropy':
+        #     plt.legend(loc='upper right')
+        # else:
+        #     plt.legend(loc='lower right')
+        plt.legend(loc='upper right')
 
         plt.savefig(os.path.join(log_folder, self.name + '_%g.png' % iteration))
 
